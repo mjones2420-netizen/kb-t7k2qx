@@ -1,5 +1,5 @@
 // Minimal service worker — caches app shell for offline + PWA install.
-const CACHE = "emom-v1";
+const CACHE = "emom-v2";
 const ASSETS = [
   ".",
   "index.html",
