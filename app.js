@@ -15,6 +15,7 @@ const els = {
 };
 
 const SECONDS_PER_ROUND = 60;
+const COUNTDOWN_SECONDS = 5;
 
 let state = {
   repsPerMin: 10,
@@ -25,7 +26,22 @@ let state = {
   pausedAt: 0,       // seconds already elapsed in current round when paused
   ticker: null,
   lastBeepSecond: -1,
+  countingDown: false,
+  countdownStart: 0,
 };
+
+// ---- Wake Lock ----
+let wakeLock = null;
+async function acquireWakeLock() {
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release(); wakeLock = null; }
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.running) acquireWakeLock();
+});
 
 // ---- Audio (Web Audio API, no files) ----
 let audioCtx = null;
@@ -103,24 +119,61 @@ function stopTicker() {
   state.ticker = null;
 }
 
+// ---- Get-ready countdown ----
+function renderCountdown(n) {
+  els.countdown.textContent = n;
+  els.countdown.classList.remove("warn", "go");
+  els.roundNow.textContent = "—";
+  els.totalReps.textContent = "—";
+}
+
+function countdownTick() {
+  const elapsed = (Date.now() - state.countdownStart) / 1000;
+  const remaining = Math.ceil(COUNTDOWN_SECONDS - elapsed);
+  if (remaining <= 0) {
+    stopTicker();
+    state.countingDown = false;
+    state.startTime = Date.now();
+    state.lastBeepSecond = -1;
+    state.running = true;
+    els.roundNow.textContent = state.currentRound;
+    els.totalReps.textContent = 0;
+    render(SECONDS_PER_ROUND);
+    startBeep();
+    vibrate(200);
+    startTicker();
+  } else {
+    renderCountdown(remaining);
+  }
+}
+
 function begin() {
   unlockAudio();
+  acquireWakeLock();
   state.repsPerMin = Math.max(1, parseInt(els.reps.value, 10) || 1);
   state.totalMinutes = Math.max(1, parseInt(els.minutes.value, 10) || 1);
   state.currentRound = 1;
-  state.startTime = Date.now();
   state.lastBeepSecond = -1;
-  state.running = true;
+  state.running = false;
+  state.countingDown = true;
+  state.countdownStart = Date.now();
   els.roundTotal.textContent = state.totalMinutes;
   els.repTarget.textContent = state.repsPerMin;
   els.pauseBtn.textContent = "Pause";
   show("running");
-  render(SECONDS_PER_ROUND);
-  startBeep();
-  startTicker();
+  renderCountdown(COUNTDOWN_SECONDS);
+  state.ticker = setInterval(countdownTick, 100);
 }
 
 function togglePause() {
+  if (state.countingDown) {
+    // Cancel countdown, go back to setup
+    stopTicker();
+    state.countingDown = false;
+    releaseWakeLock();
+    show("setup");
+    return;
+  }
   if (state.running) {
     stopTicker();
     state.pausedAt = (Date.now() - state.startTime) / 1000;
@@ -130,6 +183,7 @@ function togglePause() {
     state.startTime = Date.now() - state.pausedAt * 1000;
     state.running = true;
     els.pauseBtn.textContent = "Pause";
+    acquireWakeLock();
     startTicker();
   }
 }
@@ -137,12 +191,15 @@ function togglePause() {
 function reset() {
   stopTicker();
   state.running = false;
+  state.countingDown = false;
+  releaseWakeLock();
   show("setup");
 }
 
 function finish() {
   stopTicker();
   state.running = false;
+  releaseWakeLock();
   els.finalReps.textContent = state.repsPerMin * state.totalMinutes;
   show("done");
 }
